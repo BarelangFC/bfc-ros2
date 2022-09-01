@@ -80,23 +80,20 @@ private:
 
 motion_bridge::motion_bridge() : Node("motion_bridge")
 {
-    this->declare_parameter("robotNumber",0);
-    robotNumber = this->get_parameter("robotNumber").as_int();
-
     walk_command_ = this->create_subscription<geometry_msgs::msg::Twist>(
-        "robot_walk_" + std::to_string(robotNumber), 10,
+        "robot_walk", 10,
         std::bind(&motion_bridge::walkCommand, this, std::placeholders::_1));
 
     head_command_ = this->create_subscription<bfc_msgs::msg::HeadMovement>(
-        "robot_head_" + std::to_string(robotNumber), 10,
+        "robot_head", 10,
         std::bind(&motion_bridge::headCommand, this, std::placeholders::_1));
 
     motion_command_ = this->create_subscription<std_msgs::msg::String>(
-        "robot_motion_" + std::to_string(robotNumber), 10,
+        "robot_motion", 10,
         std::bind(&motion_bridge::motionCommand, this, std::placeholders::_1));
 
-    button_state_ = this->create_publisher<bfc_msgs::msg::Button>("robot_button_" + std::to_string(robotNumber), 10);
-    imu_state_ = this->create_publisher<sensor_msgs::msg::Imu>("robot_imu_" + std::to_string(robotNumber), 10);
+    button_state_ = this->create_publisher<bfc_msgs::msg::Button>("robot_button", 10);
+    imu_state_ = this->create_publisher<sensor_msgs::msg::Imu>("robot_imu", 10);
     timer_ = this->create_wall_timer(std::chrono::milliseconds(40),
                                             std::bind(&motion_bridge::publishSensor, this));
 

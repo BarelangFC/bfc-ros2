@@ -15,6 +15,7 @@ def generate_launch_description():
         name = 'motion_bridge',
         executable = 'motion_bridge',
         parameters = [config],
+        namespace = 'robot_1',
         output = 'screen'
     )
 
@@ -23,14 +24,7 @@ def generate_launch_description():
         name = 'main_strategy',
         executable = 'main',
         parameters = [config],
-        output = 'screen'
-    )
-
-    coordination_node=Node(
-        package = 'coordination',
-        name = 'coordination',
-        executable = 'coordination',
-        parameters = [config],
+        namespace = 'robot_1',
         output = 'screen'
     )
 
@@ -39,11 +33,11 @@ def generate_launch_description():
         name = 'game_controller',
         executable = 'game_controller',
         parameters = [config],
+        namespace = 'robot_1',
         output = 'screen'
     )
 
     ld.add_action(motion_bridge_node)
     ld.add_action(main_strategy_node)
-    ld.add_action(coordination_node)
     ld.add_action(game_controller_node)
     return ld

@@ -1,97 +1,91 @@
-main_strategy:
-  ros__parameters:
-    robotNumber: 1
+robot_1:
+  main_strategy:
+    ros__parameters:
+      robotNumber: 1
 
-    frame_X: 640
-    frame_Y: 480
+      frame_X: 640
+      frame_Y: 480
 
-    pPanTendang: -0.17
-    pTiltTendang: -0.50
-    ballPositioningSpeed: 0.12
+      pPanTendang: -0.17
+      pTiltTendang: -0.50
+      ballPositioningSpeed: 0.12
 
-    cSekarang: -0.60
-    cAktif: -1.40
+      cSekarang: -0.60
+      cAktif: -1.40
 
-    posTiltLocal: -1.90
-    postTiltGoal: -1.80
+      posTiltLocal: -1.90
+      postTiltGoal: -1.80
 
-    ball_panKP: 0.075
-    ball_panKD: 0.0000505
-    ball_tiltKP: 0.05
-    ball_tiltKD: 0.0000755
+      ball_panKP: 0.075
+      ball_panKD: 0.0000505
+      ball_tiltKP: 0.05
+      ball_tiltKD: 0.0000755
 
-    goal_panKP: 0.10
-    goal_panKD: 0.000050
-    goal_tiltKP: 0.05
-    goal_tiltKD: 0.000050
+      goal_panKP: 0.10
+      goal_panKD: 0.000050
+      goal_tiltKP: 0.05
+      goal_tiltKD: 0.000050
 
-    errorXwalk: -0.0039990002499375
-    errorYwalk: 0.0
-    errorAwalk: -0.01
+      errorXwalk: -0.0039990002499375
+      errorYwalk: 0.0
+      errorAwalk: -0.01
 
-    jalan: 0.040
-    lari: 0.050
-    kejar: 0.060
-    kejarMid: 0.070
-    kejarMax: 0.080
+      jalan: 0.040
+      lari: 0.050
+      kejar: 0.060
+      kejarMid: 0.070
+      kejarMax: 0.080
 
-    tendangJauh: 1
-    tendangSamping: 3
-    tendangDekat: 5
+      tendangJauh: 1
+      tendangSamping: 3
+      tendangDekat: 5
 
-    sudutTengah: 0
-    sudutKanan: 30
-    sudutKiri: -30
+      sudutTengah: 0
+      sudutKanan: 30
+      sudutKiri: -30
 
-    rotateGoal_x: -0.0005
-    rotateGoal_y: 0.017
-    rotateGoal_a: 0.14
+      rotateGoal_x: -0.0005
+      rotateGoal_y: 0.017
+      rotateGoal_a: 0.14
 
-    myAccrX: 0.3
-    myAccrY: 0.0
+      myAccrX: 0.3
+      myAccrY: 0.0
 
-    tinggiRobot: 48
+      tinggiRobot: 48
 
-    outputSudutY1: 9.0
-    inputSudutY1: -0.40
-    outputSudutY2: 60.0
-    inputSudutY2: -1.43
+      outputSudutY1: 9.0
+      inputSudutY1: -0.40
+      outputSudutY2: 60.0
+      inputSudutY2: -1.43
 
-    outputSudutX1: 0.0
-    inputSudutX1: 0.0
-    outputSudutX2: 45.0
-    inputSudutX2: -0.8
+      outputSudutX1: 0.0
+      inputSudutX1: 0.0
+      outputSudutX2: 45.0
+      inputSudutX2: -0.8
 
-    usePenaltyStrategy: false
-    useVision: true
-    useRos: true
-    useImu: true
-    useGameController: true
-    useCoordination: true
-    useLocalization: false
-    useFollowSearchGoal: true
-    useSearchGoal: false
-    useDribble: false
-    dribbleOnly: false
-    useSideKick: false
-    useLastDirection: true
-    useNearFollowSearchGoal: false
-    firstStateCondition: 0
+      usePenaltyStrategy: false
+      useVision: true
+      useRos: true
+      useImu: true
+      useGameController: true
+      useCoordination: true
+      useLocalization: false
+      useFollowSearchGoal: true
+      useSearchGoal: false
+      useDribble: false
+      dribbleOnly: false
+      useSideKick: false
+      useLastDirection: true
+      useNearFollowSearchGoal: false
+      firstStateCondition: 0
 
-    team: 4 # nomer tim di game controller
-    barelang_color: 1 # inter = team, nasional (0 = cyan, magenta = 1)
-    dropball: 2 # 128 = inter, 2 = nasional
+      team: 4 # nomer tim di game controller
+      barelang_color: 1 # inter = team, nasional (0 = cyan, magenta = 1)
+      dropball: 2 # 128 = inter, 2 = nasional
 
-motion_bridge:
-  ros__parameters:
-    robotNumber: 1
-
-coordination:
-  ros__parameters:
-    robotNumber: 1
-
-game_controller:
-  ros__parameters:
-    robotNumber: 1
-    Team: 4 # nomer tim di game controller
-    Server: "192.168.43.237"
+robot_1:
+  game_controller:
+    ros__parameters:
+      Player: 1 # robotNumber
+      Team: 4 # nomer tim di game controller
+      Server: "192.168.43.237"

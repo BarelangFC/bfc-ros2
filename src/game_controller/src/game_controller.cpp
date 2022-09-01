@@ -38,16 +38,16 @@ class game_controller : public rclcpp::Node
 public:
     game_controller() : Node("game_controller")
     {
-        this->declare_parameter("robotNumber", 0);
+        this->declare_parameter("Player", 0);
         this->declare_parameter("Team", 0);
         this->declare_parameter("Server", "");
-        robotNumber = Player = this->get_parameter("robotNumber").as_int();
+        Player = this->get_parameter("Player").as_int();
         Team = this->get_parameter("Team").as_int();
         server_string = this->get_parameter("Server").as_string();
         Server = server_string.c_str();
 
         Publisher_ = this->create_publisher<std_msgs::msg::Int64MultiArray>(
-            "robot_game_controller_" + std::to_string(robotNumber), 10);
+            "robot_game_controller", 10);
 
         timer_ = this->create_wall_timer(
             35ms, std::bind(&game_controller::publishData, this));

@@ -28,57 +28,58 @@ public:
         getParameters();
 
         robotNumber = this->get_parameter("robotNumber").as_int();
+
         button_ = this->create_subscription<bfc_msgs::msg::Button>(
-            "robot_button_" + std::to_string(robotNumber), 10, 
+            "robot_button", 10,
             std::bind(&main_strategy::readButton, this, std::placeholders::_1));
         imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
-            "robot_imu_" + std::to_string(robotNumber), 10, 
+            "robot_imu", 10,
             std::bind(&main_strategy::readImu, this, std::placeholders::_1));
         bounding_boxes_ = this->create_subscription<std_msgs::msg::Int32MultiArray>(
-            "robot_vision_" + std::to_string(robotNumber), 10, 
+            "robot_vision", 10,
             std::bind(&main_strategy::objCoor, this, std::placeholders::_1));
         gameControllerSubscription_ = this->create_subscription<std_msgs::msg::Int64MultiArray>(
-            "robot_game_controller_" + std::to_string(robotNumber), 10, 
+            "robot_game_controller", 10,
             std::bind(&main_strategy::readGameControllerData, this, std::placeholders::_1));
 
         if (robotNumber != 1)
         {
             robot1Subscription_ = this->create_subscription<bfc_msgs::msg::Coordination>(
-                "robot_satu", 10, std::bind(&main_strategy::readRobotCoordinationData1, this, std::placeholders::_1));
+                "/robot_1/coordination", 10, std::bind(&main_strategy::readRobotCoordinationData1, this, std::placeholders::_1));
         }
 
         if (robotNumber != 2)
         {
             robot2Subscription_ = this->create_subscription<bfc_msgs::msg::Coordination>(
-                "robot_dua", 10, std::bind(&main_strategy::readRobotCoordinationData2, this, std::placeholders::_1));
+                "/robot_2/coordination", 10, std::bind(&main_strategy::readRobotCoordinationData2, this, std::placeholders::_1));
         }
 
         if (robotNumber != 3)
         {
             robot3Subscription_ = this->create_subscription<bfc_msgs::msg::Coordination>(
-                "robot_tiga", 10, std::bind(&main_strategy::readRobotCoordinationData3, this, std::placeholders::_1));
+                "/robot_3/coordination", 10, std::bind(&main_strategy::readRobotCoordinationData3, this, std::placeholders::_1));
         }
 
         if (robotNumber != 4)
         {
             robot4Subscription_ = this->create_subscription<bfc_msgs::msg::Coordination>(
-                "robot_empat", 10, std::bind(&main_strategy::readRobotCoordinationData4, this, std::placeholders::_1));
+                "/robot_4/coordination", 10, std::bind(&main_strategy::readRobotCoordinationData4, this, std::placeholders::_1));
         }
 
         if (robotNumber != 5)
         {
             robot5Subscription_ = this->create_subscription<bfc_msgs::msg::Coordination>(
-                "robot_lima", 10, std::bind(&main_strategy::readRobotCoordinationData5, this, std::placeholders::_1));
+                "/robot_5/coordination", 10, std::bind(&main_strategy::readRobotCoordinationData5, this, std::placeholders::_1));
         }
 
-        robotCoordination_ = this->create_publisher<std_msgs::msg::Int16MultiArray>(
-            "coordination_data_" + std::to_string(robotNumber), 10);
+        robotCoordination_ = this->create_publisher<bfc_msgs::msg::Coordination>(
+            "coordination", 10);
         cmd_head_ = this->create_publisher<bfc_msgs::msg::HeadMovement>(
-            "robot_head_" + std::to_string(robotNumber), 10);
+            "robot_head", 10);
         cmd_vel_ = this->create_publisher<geometry_msgs::msg::Twist>(
-            "robot_walk_" + std::to_string(robotNumber), 10);
+            "robot_walk", 10);
         cmd_mot_ = this->create_publisher<std_msgs::msg::String>(
-            "robot_motion_" + std::to_string(robotNumber), 10);
+            "robot_motion", 10);
     }
 
     void display()
@@ -2402,7 +2403,7 @@ public:
 
     void readGameControllerData(const std_msgs::msg::Int64MultiArray::SharedPtr msg)
     {
-        State = msg->data[0]; 
+        State = msg->data[0];
         FirstHalf = msg->data[1];
         Version = msg->data[2];
         PacketNumber = msg->data[3];
@@ -2747,9 +2748,15 @@ public:
 
     void sendRobotCoordinationData(signed short rNumber, signed short rStatus, signed short sNumber, signed short gridPos, signed short fBall, signed short dBall, signed short gridBall, signed short backIn)
     {
-        auto msg = std_msgs::msg::Int16MultiArray();
-        msg.data = {rNumber, rStatus, sNumber, gridPos, fBall, dBall, gridBall, backIn};
-        // msg.data = {1, 0, 2, 3, 4};
+        auto msg = bfc_msgs::msg::Coordination();
+        msg.robot_number = rNumber;
+        msg.status = rStatus;
+        msg.state = sNumber;
+        msg.grid_position = gridPos;
+        msg.found_ball = fBall;
+        msg.distance_ball = dBall;
+        msg.grid_ball = gridBall;
+        msg.back_in = backIn;
         robotCoordination_->publish(msg);
     }
 
@@ -10550,7 +10557,7 @@ private:
     rclcpp::Subscription<bfc_msgs::msg::Coordination>::SharedPtr robot4Subscription_;
     rclcpp::Subscription<bfc_msgs::msg::Coordination>::SharedPtr robot5Subscription_;
     rclcpp::Subscription<std_msgs::msg::Int64MultiArray>::SharedPtr gameControllerSubscription_;
-    rclcpp::Publisher<std_msgs::msg::Int16MultiArray>::SharedPtr robotCoordination_;
+    rclcpp::Publisher<bfc_msgs::msg::Coordination>::SharedPtr robotCoordination_;
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_;
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr cmd_mot_;
     rclcpp::Publisher<bfc_msgs::msg::HeadMovement>::SharedPtr cmd_head_;
