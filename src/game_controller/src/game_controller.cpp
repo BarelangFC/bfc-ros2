@@ -47,7 +47,7 @@ public:
         Server = server_string.c_str();
 
         Publisher_ = this->create_publisher<std_msgs::msg::Int64MultiArray>(
-            "robot_game_controller", 10);
+            "game_controller", 10);
 
         timer_ = this->create_wall_timer(
             35ms, std::bind(&game_controller::publishData, this));

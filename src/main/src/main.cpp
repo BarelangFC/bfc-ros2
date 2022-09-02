@@ -31,16 +31,16 @@ public:
         robotNumber = this->get_parameter("robotNumber").as_int();
 
         button_ = this->create_subscription<bfc_msgs::msg::Button>(
-            "robot_button", 10,
+            "button", 10,
             std::bind(&main_strategy::readButton, this, std::placeholders::_1));
         imu_ = this->create_subscription<sensor_msgs::msg::Imu>(
-            "robot_imu", 10,
+            "imu", 10,
             std::bind(&main_strategy::readImu, this, std::placeholders::_1));
         bounding_boxes_ = this->create_subscription<std_msgs::msg::Int32MultiArray>(
-            "robot_vision", 10,
+            "vision", 10,
             std::bind(&main_strategy::objCoor, this, std::placeholders::_1));
         gameControllerSubscription_ = this->create_subscription<std_msgs::msg::Int64MultiArray>(
-            "robot_game_controller", 10,
+            "game_controller", 10,
             std::bind(&main_strategy::readGameControllerData, this, std::placeholders::_1));
 
         if (robotNumber != 1)
@@ -76,11 +76,11 @@ public:
         robotCoordination_ = this->create_publisher<bfc_msgs::msg::Coordination>(
             "coordination", 10);
         cmd_head_ = this->create_publisher<bfc_msgs::msg::HeadMovement>(
-            "robot_head", 10);
+            "head", 10);
         cmd_vel_ = this->create_publisher<geometry_msgs::msg::Twist>(
-            "robot_walk", 10);
+            "walk", 10);
         cmd_mot_ = this->create_publisher<std_msgs::msg::String>(
-            "robot_motion", 10);
+            "motion", 10);
     }
 
     void display()
@@ -99,6 +99,12 @@ public:
         cout << "barelang_color = " << barelang_color << endl;
         cout << "signIn = " << boolalpha << signIn << endl;
         cout << "headPan = " << headPan << ", headTilt = " << headTilt << endl;
+        cout << "==========COORDINATION==========" << endl;
+        cout << "Found = " << robot1Id << ", State = " << robot1State << ", dBall = " << robot1DBall << endl;
+        cout << "Found = " << robot2Id << ", State = " << robot2State << ", dBall = " << robot2DBall << endl;
+        cout << "Found = " << robot3Id << ", State = " << robot3State << ", dBall = " << robot3DBall << endl;
+        cout << "Found = " << robot4Id << ", State = " << robot4State << ", dBall = " << robot4DBall << endl;
+        cout << "Found = " << robot5Id << ", State = " << robot5State << ", dBall = " << robot5DBall << endl;
 
         cout << "\033[2J\033[1;1H";
     }
