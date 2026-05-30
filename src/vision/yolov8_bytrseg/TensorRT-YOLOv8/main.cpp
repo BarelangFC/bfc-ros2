@@ -1,0 +1,680 @@
+#include <iostream>
+#include <string>
+#include <vector>
+#include <chrono>
+#include <thread>
+
+#include <filesystem> // Untuk membuat direktori otomatis
+#include <iomanip>    // Untuk format timestamp
+#include <sstream>    // Untuk membuat nama file
+
+#include "infer.h"
+#include "BYTETracker.h"
+#include "field_segmentation.h"
+#include "cnpy.h"
+
+#include <opencv2/opencv.hpp>
+#include <opencv2/cudaimgproc.hpp>
+#include <opencv2/cudawarping.hpp>
+
+// ROS 2 includes
+#include <rclcpp/rclcpp.hpp>
+#include "detect_msgs/msg/midpoint_array.hpp"
+#include "detect_msgs/msg/midpoint_info.hpp"
+#include "std_msgs/msg/header.hpp"
+
+// Need to track the ROS node
+class YoloBytrsegNode : public rclcpp::Node {
+public:
+    YoloBytrsegNode() : Node("yolo_bytrseg_node") {
+        // Create publisher for midpoints
+        ball_publisher_ = this->create_publisher<detect_msgs::msg::MidpointArray>("bytrseg/midpoints", 5);
+        
+        // Parameters for tracking mode
+        use_tracking_ = this->declare_parameter("use_tracking", true);
+        detection_only_mode_ = this->declare_parameter("detection_only", false);
+        
+        RCLCPP_INFO(this->get_logger(), "YoloBytrsegNode initialized with tracking: %s", 
+                   use_tracking_ ? "ON" : "OFF");
+    }
+
+    void publish_midpoints(const std::vector<Detection>& all_detections,
+                           const std::vector<Detection>& pub_det, 
+                           const std::vector<STrack>& tracks) {
+        auto msg = detect_msgs::msg::MidpointArray();
+        msg.header.stamp = this->now();
+        msg.header.frame_id = "camera_frame";  // You can customize this
+        
+        msg.detection_count = 0;
+        msg.tracking_count = 0;
+        
+        // 1. Process tracked balls (if tracking is enabled)
+        if (use_tracking_) {
+            for (const auto& track : tracks) {
+                detect_msgs::msg::MidpointInfo info;
+                info.class_id = 0;
+                info.class_name = "ball"; // assume 0 is ball
+                info.x = static_cast<int64_t>(track.tlwh[0] + track.tlwh[2] / 2);
+                info.y = static_cast<int64_t>(track.tlwh[1] + track.tlwh[3] / 2);
+                info.confidence = track.score;
+                info.track_id = track.track_id;
+                info.status = "tracked";
+                
+                msg.data.push_back(info);
+                msg.tracking_count++;
+            }
+        }
+        
+        // 2. Process non-tracked balls (pub_det) if tracking is OFF
+        if (!use_tracking_) {
+            for (const auto& det : pub_det) {
+                detect_msgs::msg::MidpointInfo info;
+                info.class_id = det.classId;
+                info.class_name = "ball";
+                info.x = static_cast<int64_t>((det.bbox[0] + det.bbox[2]) / 2);
+                info.y = static_cast<int64_t>((det.bbox[1] + det.bbox[3]) / 2);
+                info.confidence = det.conf;
+                info.track_id = -1;
+                info.status = "detected";
+                
+                msg.data.push_back(info);
+                msg.detection_count++;
+            }
+        }
+        
+        // 3. Process ALL other classes from all_detections
+        for (const auto& det : all_detections) {
+            if (det.conf >= 0.25f && det.classId != 0) { // non-ball classes
+                extern const std::vector<std::string> vClassNames; // Ensure it's accessible
+                detect_msgs::msg::MidpointInfo info;
+                info.class_id = det.classId;
+                if (det.classId < vClassNames.size()) {
+                    info.class_name = vClassNames[det.classId];
+                } else {
+                    info.class_name = "unknown";
+                }
+                info.x = static_cast<int64_t>((det.bbox[0] + det.bbox[2]) / 2);
+                info.y = static_cast<int64_t>((det.bbox[1] + det.bbox[3]) / 2);
+                info.confidence = det.conf;
+                info.track_id = -1;
+                info.status = "detected";
+                
+                msg.data.push_back(info);
+                msg.detection_count++;
+            }
+        }
+        
+        ball_publisher_->publish(msg);
+    }
+
+private:
+    rclcpp::Publisher<detect_msgs::msg::MidpointArray>::SharedPtr ball_publisher_;
+    bool use_tracking_;
+    bool detection_only_mode_;
+};
+
+// Fungsi untuk membuat direktori jika belum ada
+    void ensure_directory_exists(const std::string& path) {
+       if (!std::filesystem::exists(path)) {
+           std::filesystem::create_directories(path);
+    }
+}
+
+
+int run(int mode, const std::string &sourcePath, bool use_tracking, bool show_detailed_fps, bool save_mode, int save_interval_ms) {
+    // Initialize ROS if not already initialized
+    if (!rclcpp::ok()) {
+        rclcpp::init(0, nullptr);
+    }
+
+    // Create ROS node
+    auto ros_node = std::make_shared<YoloBytrsegNode>();
+    
+    // Set the tracking mode parameter
+    ros_node->set_parameter(rclcpp::Parameter("use_tracking", use_tracking));
+
+    cv::VideoCapture cap;
+    cv::VideoWriter writer;
+    bool is_webcam = (mode == 2);
+
+    // Open input
+    if (is_webcam) {
+        int device_id = std::stoi(sourcePath);
+        cap.open(device_id, cv::CAP_V4L2); // Use V4L2 for Linux
+        cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
+        cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
+        cap.set(cv::CAP_PROP_FPS, 30);
+        cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
+    	// Set camera parameters
+    	/*cap.set(cv::CAP_PROP_BRIGHTNESS, 130);              // Brightness
+    	cap.set(cv::CAP_PROP_CONTRAST, 129);                // Contrast
+    	cap.set(cv::CAP_PROP_SATURATION, 152);             // Saturation
+    	cap.set(cv::CAP_PROP_GAIN, 255);                    // Gain
+    	cap.set(cv::CAP_PROP_AUTO_WB, true);              // Auto White Balance
+    	//cap.set(cv::CAP_PROP_WB_TEMPERATURE, 4750);       // White Balance
+    	cap.set(cv::CAP_PROP_AUTO_EXPOSURE, true);        // Auto Exposure
+    	//cap.set(cv::CAP_PROP_EXPOSURE, 270);              // Exposure
+    	cap.set(cv::CAP_PROP_AUTOFOCUS, true);            // Auto Focus
+    	//cap.set(cv::CAP_PROP_FOCUS, 0);                   // Focus
+    	//cap.set(cv::CAP_PROP_FPS, 35);
+    	cap.set(cv::CAP_PROP_GAMMA, 270); 
+    	cap.set(cv::CAP_PROP_SHARPNESS, 128);*/
+    	
+    	//widelens
+    	cap.set(cv::CAP_PROP_BRIGHTNESS, 0);              // Brightness
+    	cap.set(cv::CAP_PROP_CONTRAST, 15);               // Contrast
+    	cap.set(cv::CAP_PROP_SATURATION, 30);             // Saturation
+    	cap.set(cv::CAP_PROP_GAIN, 1);                    // Gain
+    	cap.set(cv::CAP_PROP_AUTO_WB, 44);              // Auto White Balance
+    	// cap.set(cv::CAP_PROP_WB_TEMPERATURE, 5346);    // White Balance
+    	//cap.set(cv::CAP_PROP_AUTO_EXPOSURE, 21);      // Auto Exposure
+    	//cap.set(cv::CAP_PROP_EXPOSURE, 2600);             // Exposure
+    	cap.set(cv::CAP_PROP_AUTOFOCUS, 39);            // Auto Focus
+    	// cap.set(cv::CAP_PROP_FOCUS, 0);                // Focus
+    	cap.set(cv::CAP_PROP_FPS, 30);
+    	cap.set(cv::CAP_PROP_GAMMA, 270); 
+    	cap.set(cv::CAP_PROP_SHARPNESS, 20);
+        
+        if (!cap.isOpened()) {
+            std::cerr << "Error: Could not open webcam " << device_id << std::endl;
+            return -1;
+        }
+        std::cout << "Webcam opened successfully." << std::endl;
+    } else {
+        cap.open(sourcePath);
+        if (!cap.isOpened()) {
+            std::cerr << "Error: Could not open video " << sourcePath << std::endl;
+            return -1;
+        }
+
+        int img_w = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+        int img_h = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+        int fps = static_cast<int>(cap.get(cv::CAP_PROP_FPS));
+        writer.open("result.mp4", cv::VideoWriter::fourcc('m', 'p', 'v', '4'), fps, cv::Size(img_w, img_h));
+        if (!writer.isOpened()) {
+            std::cerr << "Error: Could not create output video file." << std::endl;
+            return -1;
+        }
+    }
+
+    // Detector
+    std::string trtFile = "./detect/bestyolov8nlaptopangga.plan";
+    //std::string trtFile = "/home/barelangfc3/bfc_ros2/src/yolov8_bytrseg/TensorRT-YOLOv8/detect/build/ball5-only.plan";
+    //std::string trtFile = "/home/barelangfc3/bfc_ros2/src/yolov8_bytrseg/TensorRT-YOLOv8/detect/build/best11class.plan";
+    //std::string trtFile = "/home/barelangfc3/bfc_ros2/src/yolov8_bytrseg/TensorRT-YOLOv8/detect/build/best11laptopfajri.plan";
+    //std::string trtFile = "/home/barelangfc3/bfc_ros2/src/yolov8_bytrseg/TensorRT-YOLOv8/detect/build/robocup6000.plan";
+    
+    YoloDetector detector(trtFile, 0, 0.45f, 0.20f);
+
+    // Field segmentation (GMM + flood fill + region growing + convex hull)
+    FieldSegmentation field_seg(5,    // 5 GMM components
+                                2,    // downscale ×2 for speed
+                                8.0); // Mahalanobis threshold (DIKETATKAN dari 12.0)
+    std::cout << "Field segmentation enabled." << std::endl;
+
+    // Tracker (optional)
+    BYTETracker* tracker = nullptr;
+    if (use_tracking) {
+        int fps = static_cast<int>(cap.get(cv::CAP_PROP_FPS));
+        tracker = new BYTETracker(fps > 0 ? fps : 30, 30);
+        std::cout << "ByteTrack enabled." << std::endl;
+    } else {
+        std::cout << "Tracking disabled. Running detection only." << std::endl;
+    }
+
+    // --- CAMERA CALIBRATION SETUP ---
+    cv::Mat map1, map2;
+    cv::Rect roi_crop(0, 0, 0, 0);
+    std::cout << "Loading camera calibration natively from npz using cnpy..." << std::endl;
+    try {
+        std::string npz_file = "./detect/calibration/calibration.npz";
+        cnpy::npz_t my_npz = cnpy::npz_load(npz_file);
+        
+        // Prevent force close/segfaults by checking if keys actually exist
+        if (my_npz.find("mtx") == my_npz.end() || my_npz.find("dist") == my_npz.end()) {
+            throw std::runtime_error("Keys 'mtx' and/or 'dist' not found. Check if your test_camera python format matches.");
+        }
+        
+        cnpy::NpyArray arr_mtx = my_npz["mtx"];
+        cnpy::NpyArray arr_dist = my_npz["dist"];
+        
+        cv::Mat mtx(3, 3, CV_64F);
+        if (arr_mtx.word_size == 4) {
+            cv::Mat temp(3, 3, CV_32F);
+            std::memcpy(temp.data, arr_mtx.data<float>(), arr_mtx.num_vals * sizeof(float));
+            temp.convertTo(mtx, CV_64F);
+        } else {
+            std::memcpy(mtx.data, arr_mtx.data<double>(), arr_mtx.num_vals * sizeof(double));
+        }
+        
+        cv::Mat dist(1, arr_dist.num_vals, CV_64F);
+        if (arr_dist.word_size == 4) {
+            cv::Mat temp(1, arr_dist.num_vals, CV_32F);
+            std::memcpy(temp.data, arr_dist.data<float>(), arr_dist.num_vals * sizeof(float));
+            temp.convertTo(dist, CV_64F);
+        } else {
+            std::memcpy(dist.data, arr_dist.data<double>(), arr_dist.num_vals * sizeof(double));
+        }
+
+        cv::Size dim(1280, 720); // standard camera resolution matching setup_camera
+        cv::Mat newcameramtx = cv::getOptimalNewCameraMatrix(mtx, dist, dim, 1, dim, &roi_crop);
+        cv::initUndistortRectifyMap(mtx, dist, cv::Mat(), newcameramtx, dim, CV_16SC2, map1, map2);
+        
+        std::cout << "Camera calibration maps (Standard) fully generated! DIM: " << dim.width << "x" << dim.height << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "[WARNING] Failed to load calibration npz natively: " << e.what() << std::endl;
+        std::cerr << "[WARNING] Running without camera undistortion." << std::endl;
+    }
+    // --------------------------------
+
+    // CUDA setup
+    cv::cuda::GpuMat gpu_frame, resized_gpu;
+    cv::Mat resized_cpu, frame;
+
+    int target_width = 640;
+    int target_height = 360; // 1280x720 -> 16:9 aspect ratio
+
+    auto start_time = std::chrono::steady_clock::now();
+    int frame_count = 0;
+    int total_inference_ms = 0;
+    int total_capture_ms = 0;
+    int total_upload_ms = 0;
+    int total_resize_ms = 0;
+    int total_seg_ms = 0;
+    int total_draw_ms = 0;
+    int total_display_ms = 0;
+
+    // For camera FPS calculation
+    auto prev_frame_time = std::chrono::steady_clock::now();
+    double camera_fps = 0.0;
+    int camera_frame_count = 0;
+    auto camera_start_time = std::chrono::steady_clock::now();
+    // =================================================================
+    // PERSIAPAN PENYIMPANAN DATASET
+    // =================================================================
+    std::string save_dir = "/home/barelangfc3/Pictures/ambil_data";
+    auto last_save_time = std::chrono::steady_clock::now();
+    if (save_mode) {
+        ensure_directory_exists(save_dir);
+        std::cout << "Mode Dataset AKTIF. Gambar disimpan ke: " << save_dir << std::endl;
+        std::cout << "Interval simpan: " << save_interval_ms << " ms" << std::endl;
+     }
+    // =================================================================
+
+    while (rclcpp::ok()) { // Changed from true to rclcpp::ok()
+        auto capture_start = std::chrono::steady_clock::now();
+        cap >> frame;
+        auto capture_end = std::chrono::steady_clock::now();
+        int capture_ms = std::chrono::duration_cast<std::chrono::microseconds>(capture_end - capture_start).count() / 1000;
+        total_capture_ms += capture_ms;
+
+        if (frame.empty()) break;        
+        // =================================================================
+    	// LOGIKA PENYIMPANAN DATASET (AUTO-CAPTURE)
+	// =================================================================
+    	if (save_mode) {
+        	auto current_time = std::chrono::steady_clock::now();
+        	auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              	current_time - last_save_time).count();
+
+        if (elapsed_ms >= save_interval_ms) {
+            // Buat nama file rapi dengan jam dan tanggal
+            auto now = std::chrono::system_clock::now();
+            auto in_time_t = std::chrono::system_clock::to_time_t(now);
+            std::stringstream ss;
+            ss << std::put_time(std::localtime(&in_time_t), "%Y%m%d_%H%M%S");
+            std::string filename = save_dir + "/frame_" + ss.str() + ".jpg";
+
+            // Simpan gambar (menggunakan frame asli yang ukurannya belum di-resize)
+            cv::Mat frame_resized;
+            cv::resize(frame, frame_resized, cv::Size(640, 360));
+            cv::imwrite(filename, frame_resized);
+            std::cout << "\n[Dataset] Tersimpan: " << filename << std::endl;
+
+            last_save_time = current_time;
+        	}
+    	}
+  	// =================================================================
+    
+        // Apply camera calibration undistortion
+        if (!map1.empty() && !map2.empty()) {
+            cv::Mat undistorted;
+            cv::remap(frame, undistorted, map1, map2, cv::INTER_LINEAR);
+            
+            // ROI Crop based on getOptimalNewCameraMatrix
+            if (roi_crop.width > 0 && roi_crop.height > 0) {
+                frame = undistorted(roi_crop);
+            } else {
+                frame = undistorted;
+            }
+        }
+
+        // Calculate camera FPS
+        auto current_frame_time = std::chrono::steady_clock::now();
+        double frame_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(current_frame_time - prev_frame_time).count();
+        if (frame_time_ms > 0) {
+            camera_fps = 1000.0 / frame_time_ms;
+        }
+        prev_frame_time = current_frame_time;
+        camera_frame_count++;
+
+        frame_count++;
+
+        // Upload to GPU
+        auto upload_start = std::chrono::steady_clock::now();
+        gpu_frame.upload(frame);
+        auto upload_end = std::chrono::steady_clock::now();
+        int upload_ms = std::chrono::duration_cast<std::chrono::microseconds>(upload_end - upload_start).count() / 1000;
+        total_upload_ms += upload_ms;
+
+        // Resize using CUDA
+        auto resize_start = std::chrono::steady_clock::now();
+        cv::cuda::resize(gpu_frame, resized_gpu, cv::Size(target_width, target_height));
+        resized_gpu.download(resized_cpu);
+        auto resize_end = std::chrono::steady_clock::now();
+        int resize_ms = std::chrono::duration_cast<std::chrono::microseconds>(resize_end - resize_start).count() / 1000;
+        total_resize_ms += resize_ms;
+
+        auto start_infer = std::chrono::steady_clock::now();
+
+        // Run YOLO inference
+        std::vector<Detection> detections = detector.inference(resized_cpu);
+
+        std::vector<Object> objects;
+        if (use_tracking) {
+            objects.clear();
+            for (const auto& det : detections) {
+                if (det.conf >= 0.20f && det.classId == 0) { // Only track balls (class 0)
+                    cv::Rect_<float> rect(
+                        det.bbox[0],
+                        det.bbox[1],
+                        det.bbox[2] - det.bbox[0],
+                        det.bbox[3] - det.bbox[1]
+                    );
+                    Object obj{rect, det.classId, det.conf};
+                    objects.push_back(obj);
+                }
+            }
+        }
+
+        // Update tracker or just draw raw detections
+        std::vector<STrack> tracks;
+        if (use_tracking) {
+            tracks = tracker->update(objects);
+        }
+
+        auto end_infer = std::chrono::steady_clock::now();
+        int inference_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_infer - start_infer).count();
+        total_inference_ms += inference_ms;
+
+        // ===== Field Segmentation =====
+        auto seg_start = std::chrono::steady_clock::now();
+        
+        // Skip processing 2 out of 3 frames to drastically save CPU, especially when field is lost
+        static int local_seg_frame = 0;
+        if (local_seg_frame++ % 3 == 0) {
+            field_seg.process(resized_cpu);
+        }
+
+        auto seg_end = std::chrono::steady_clock::now();
+        int seg_ms = std::chrono::duration_cast<std::chrono::milliseconds>(seg_end - seg_start).count();
+        total_seg_ms += seg_ms;
+
+        // ===== Filter balls: inside field vs outside field =====
+        int balls_in_field  = 0;
+        int balls_outside   = 0;
+
+        // --- For detection-only mode: classify each detection ---
+        std::vector<bool> det_in_field(detections.size(), false);
+        for (size_t i = 0; i < detections.size(); ++i) {
+            const auto& det = detections[i];
+            if (det.conf < 0.25f || det.classId != 0) continue;
+            det_in_field[i] = field_seg.isBBoxInsideField(
+                det.bbox[0], det.bbox[1], det.bbox[2], det.bbox[3]);
+        }
+
+        // --- For tracking mode: classify each track ---
+        std::vector<bool> trk_in_field(tracks.size(), false);
+        for (size_t i = 0; i < tracks.size(); ++i) {
+            const auto& t = tracks[i];
+            if (!t.is_activated || t.state != TrackState::Tracked) continue;
+            std::vector<float> tw = t.tlwh;
+            if (tw[2] * tw[3] <= 20) continue;
+            trk_in_field[i] = field_seg.isBBoxInsideField(
+                tw[0], tw[1], tw[0] + tw[2], tw[1] + tw[3]);
+        }
+
+        // ===== Publish ONLY in-field balls =====
+        {
+            // Build filtered detection / track lists
+            std::vector<Detection> pub_det;
+            for (size_t i = 0; i < detections.size(); ++i) {
+                if (det_in_field[i]) pub_det.push_back(detections[i]);
+            }
+            std::vector<STrack> pub_trk;
+            for (size_t i = 0; i < tracks.size(); ++i) {
+                if (trk_in_field[i]) pub_trk.push_back(tracks[i]);
+            }
+            if (!pub_det.empty() || !pub_trk.empty() || !detections.empty()) {
+                ros_node->publish_midpoints(detections, pub_det, pub_trk);
+                balls_in_field = (int)pub_det.size() + (int)pub_trk.size();
+            }
+            // Count outside
+            for (size_t i = 0; i < detections.size(); ++i) {
+                if (detections[i].conf >= 0.25f && detections[i].classId == 0 && !det_in_field[i])
+                    balls_outside++;
+            }
+            for (size_t i = 0; i < tracks.size(); ++i) {
+                if (!trk_in_field[i] && tracks[i].is_activated &&
+                    tracks[i].state == TrackState::Tracked) {
+                    std::vector<float> tw = tracks[i].tlwh;
+                    if (tw[2] * tw[3] > 20) balls_outside++;
+                }
+            }
+        }
+
+        // ===== Draw results =====
+        auto draw_start = std::chrono::steady_clock::now();
+
+        // Draw field overlay first (below bboxes)
+        field_seg.drawOverlay(resized_cpu, 0.15f);
+
+        // Draw raw (non-ball) detections unchanged
+        for (size_t i = 0; i < detections.size(); ++i) {
+            const auto& det = detections[i];
+            if (det.conf < 0.25f) continue;
+            if (det.classId == 0) continue;   // balls drawn separately
+
+            int x1 = static_cast<int>(det.bbox[0]);
+            int y1 = static_cast<int>(det.bbox[1]);
+            int x2 = static_cast<int>(det.bbox[2]);
+            int y2 = static_cast<int>(det.bbox[3]);
+            cv::Scalar color(55 * det.classId % 255,
+                             113 * det.classId % 255,
+                             171 * det.classId % 255);
+            cv::rectangle(resized_cpu, cv::Point(x1, y1),
+                          cv::Point(x2, y2), color, 2);
+            std::string label = vClassNames[det.classId] + " " +
+                                std::to_string(det.conf).substr(0, 4);
+            int baseline;
+            cv::Size ts = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX,
+                                          0.6, 1, &baseline);
+            cv::rectangle(resized_cpu, cv::Point(x1, y1 - ts.height - 4),
+                          cv::Point(x1 + ts.width, y1), color, -1);
+            cv::putText(resized_cpu, label, cv::Point(x1, y1 - 2),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.6,
+                        cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+        }
+
+        // Draw ball detections (detection-only, non-tracking path)
+        if (!use_tracking) {
+            for (size_t i = 0; i < detections.size(); ++i) {
+                const auto& det = detections[i];
+                if (det.conf < 0.25f || det.classId != 0) continue;
+
+                int x1 = static_cast<int>(det.bbox[0]);
+                int y1 = static_cast<int>(det.bbox[1]);
+                int x2 = static_cast<int>(det.bbox[2]);
+                int y2 = static_cast<int>(det.bbox[3]);
+
+                // YELLOW = in field (ball), GRAY = outside field (not ball)
+                cv::Scalar color = det_in_field[i]
+                    ? cv::Scalar(0, 255, 255)       // yellow  (BGR)
+                    : cv::Scalar(150, 150, 150);     // gray
+
+                cv::rectangle(resized_cpu, cv::Point(x1, y1),
+                              cv::Point(x2, y2), color, 2);
+
+                std::string status = det_in_field[i] ? "BALL" : "OUT";
+                std::string label = status + " " +
+                                    std::to_string(det.conf).substr(0, 4);
+                int baseline;
+                cv::Size ts = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX,
+                                              0.6, 1, &baseline);
+                cv::rectangle(resized_cpu,
+                              cv::Point(x1, y1 - ts.height - 4),
+                              cv::Point(x1 + ts.width, y1), color, -1);
+                cv::putText(resized_cpu, label, cv::Point(x1, y1 - 2),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.6,
+                            cv::Scalar(0, 0, 0), 1, cv::LINE_AA);
+            }
+        }
+
+        // Draw tracked balls with field status
+        if (use_tracking) {
+            for (size_t i = 0; i < tracks.size(); ++i) {
+                const auto& track = tracks[i];
+                if (!track.is_activated || track.state != TrackState::Tracked)
+                    continue;
+                std::vector<float> tlwh = track.tlwh;
+                if (tlwh[2] * tlwh[3] <= 20) continue;
+
+                cv::Scalar color = trk_in_field[i]
+                    ? cv::Scalar(0, 255, 255)       // yellow
+                    : cv::Scalar(150, 150, 150);     // gray
+
+                cv::Point p1(tlwh[0], tlwh[1]);
+                cv::Point p2(tlwh[0] + tlwh[2], tlwh[1] + tlwh[3]);
+                cv::rectangle(resized_cpu, p1, p2, color, 2);
+
+                std::string status = trk_in_field[i] ? "BALL" : "OUT";
+                std::string label = "ID:" + std::to_string(track.track_id) +
+                                    " " + status;
+                cv::putText(resized_cpu, label,
+                            cv::Point(p1.x, p1.y - 5),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.6, color, 2);
+            }
+        }
+        auto draw_end = std::chrono::steady_clock::now();
+        int draw_ms = std::chrono::duration_cast<std::chrono::microseconds>(draw_end - draw_start).count() / 1000;
+        total_draw_ms += draw_ms;
+
+        // ===== Debug terminal output (ROS publish status) =====
+        std::cout << "\r[ROS] Published " << balls_in_field
+                  << " ball(s) IN field | Ignored " << balls_outside
+                  << " OUTSIDE | Field: "
+                  << (field_seg.isFieldDetected()
+                        ? std::to_string(field_seg.getFieldAreaPercent()) + "%"
+                        : "N/A")
+                  << " | Seg: " << seg_ms << "ms"
+                  << std::flush;
+
+        // Calculate overall FPS
+        double avg_fps = frame_count * 1000.0 / (total_inference_ms + 1);
+        double avg_camera_fps = camera_frame_count * 1000.0 / std::chrono::duration_cast<std::chrono::milliseconds>(current_frame_time - camera_start_time).count();
+
+        // Display FPS information + field status
+        std::string fps_text = cv::format("FPS: %.1f | Cam: %.1f | Trk: %s | Field: %s",
+            avg_fps, avg_camera_fps,
+            use_tracking ? "ON" : "OFF",
+            field_seg.isFieldDetected()
+                ? (std::to_string(field_seg.getFieldAreaPercent()) + "%%").c_str()
+                : "N/A");
+        cv::putText(resized_cpu, fps_text, cv::Point(10, 15), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 255, 0), 2);
+
+        if (show_detailed_fps) {
+            // Print detailed timing information to terminal
+            std::cout << "Frame " << frame_count << " - ";
+            std::cout << "Cap: " << capture_ms << "ms | ";
+            std::cout << "Upload: " << upload_ms << "ms | ";
+            std::cout << "Resize: " << resize_ms << "ms | ";
+            std::cout << "Infer: " << inference_ms << "ms | ";
+            std::cout << "Seg: " << seg_ms << "ms | ";
+            std::cout << "Draw: " << draw_ms << "ms | ";
+            std::cout << "Cam: " << camera_fps << "fps | ";
+            std::cout << "Overall: " << avg_fps << "fps" << std::endl;
+        }
+
+        // Show in window
+        auto display_start = std::chrono::steady_clock::now();
+        cv::imshow("YOLOv8 + ByteTrack + FieldSeg (640x360)", resized_cpu);
+        char key = cv::waitKey(1);
+        if (key == 27 || key == 'q') break; // ESC or 'q' to quit
+        auto display_end = std::chrono::steady_clock::now();
+        int display_ms = std::chrono::duration_cast<std::chrono::microseconds>(display_end - display_start).count() / 1000;
+        total_display_ms += display_ms;
+
+        // Write full-size result only if processing video
+        if (!is_webcam) {
+            cv::Mat out_frame = frame.clone();
+            YoloDetector::draw_image(out_frame, detections);
+            writer.write(out_frame);
+        }
+    }
+
+    auto total_time = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - start_time
+    ).count();
+
+    std::cout << "\n--- Performance Summary ---" << std::endl;
+    std::cout << "Processed " << frame_count << " frames in " << total_time << " seconds." << std::endl;
+    if (total_time > 0) {
+        std::cout << "Average throughput: " << static_cast<double>(frame_count) / total_time << " FPS" << std::endl;
+    }
+    std::cout << "Average capture time: " << (double)total_capture_ms / frame_count << " ms" << std::endl;
+    std::cout << "Average upload time: " << (double)total_upload_ms / frame_count << " ms" << std::endl;
+    std::cout << "Average resize time: " << (double)total_resize_ms / frame_count << " ms" << std::endl;
+    std::cout << "Average inference time: " << (double)total_inference_ms / frame_count << " ms" << std::endl;
+    std::cout << "Average segmentation time: " << (double)total_seg_ms / frame_count << " ms" << std::endl;
+    std::cout << "Average draw time: " << (double)total_draw_ms / frame_count << " ms" << std::endl;
+    std::cout << "Average display time: " << (double)total_display_ms / frame_count << " ms" << std::endl;
+
+    if (tracker) delete tracker;
+    cap.release();
+    if (writer.isOpened()) writer.release();
+    cv::destroyAllWindows();
+
+    // Shutdown ROS if we initialized it
+    rclcpp::shutdown();
+    
+    return 0;
+}
+
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        std::cerr << "Usage: ./main [mode] [source] [track?] [show_details?]\n";
+        std::cerr << "Modes:\n";
+        std::cerr << "  1: Video file     --> ./main 1 ./videos/demo.mp4 [1|0] [0|1]\n";
+        std::cerr << "  2: Webcam         --> ./main 2 0 [1|0] [0|1]\n";
+        std::cerr << "track?: 1=enable tracking, 0=disable\n";
+        std::cerr << "show_details?: 1=show detailed FPS info, 0=hide\n";
+        std::cerr << "Example (webcam + tracking + details): ./main 2 0 1 1\n";
+        std::cerr << "Example (webcam + tracking + no details): ./main 2 0 1 0\n";
+        std::cerr << "Usage: ./main [mode] [source] [track?] [show_details?] [save_mode?] [save_interval_ms?]\n";
+    	std::cerr << "Example (Webcam, Track ON, Save ON tiap 2000ms): ./main 2 0 1 0 1 2000\n";
+        return -1;
+    }
+
+    int mode = std::stoi(argv[1]);
+    std::string source = (argc >= 3) ? argv[2] : "";
+    bool use_tracking = (argc >= 4) ? (std::stoi(argv[3]) != 0) : true;
+    bool show_detailed_fps = (argc >= 5) ? (std::stoi(argv[4]) != 0) : false;
+    
+    // Baca pengaturan penyimpanan dataset
+    bool save_mode = (argc >= 6) ? (std::stoi(argv[5]) != 0) : false;
+    int save_interval_ms = (argc >= 7) ? std::stoi(argv[6]) : 2000; // Default 2000 ms (2 detik)
+
+    return run(mode, source, use_tracking, show_detailed_fps, save_mode, save_interval_ms);
+}
+
+
