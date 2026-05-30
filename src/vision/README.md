@@ -27,3 +27,7 @@ This package contains a **YOLO instance segmentation** pipeline.
 
 ## Model Configuration
 Make sure you update the `config.h` and `main.cpp` files in their respective folders to point to your ONNX or TensorRT `.plan` files correctly.
+
+## Acknowledgements
+
+The vision pipelines in this directory are originally based on the [TensorRT-YOLOv8](https://github.com/emptysoal/TensorRT-YOLOv8.git) repository.

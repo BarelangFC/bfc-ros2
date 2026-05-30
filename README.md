@@ -1,8 +1,8 @@
 # BarelangFC ROS 2 KidSize Soccer Robot
 
-<p align="center">
-  <img width="30%" src="Logo.png" alt="Barelang FC Logo" />
-</p>
+<div align="center">
+  <img src="Logo.png" width="30%" alt="Barelang FC Logo">
+</div>
 
 This repository contains the ROS 2 (Foxy) software stack for the BarelangFC KidSize Humanoid Soccer Robot. The architecture is designed to handle computer vision, game state management, motion control, and high-level strategic behavior autonomously.
 
